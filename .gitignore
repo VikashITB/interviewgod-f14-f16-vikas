@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+**/__pycache__/
+*.pyc
+*.db
+*.sqlite
+*.sqlite3
+hiring_platform.db
+.DS_Store
+Thumbs.db

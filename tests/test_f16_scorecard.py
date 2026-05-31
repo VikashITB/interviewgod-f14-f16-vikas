@@ -1,0 +1,1192 @@
+"""
+tests/test_f16_scorecard.py
+===========================
+Scorecard — EOD test suite.
+
+Covers:
+    1. Incomplete scorecard blocked
+    2. Complete scorecard succeeds
+    3. Calibration check on mock dataset
+    4. Audit event emitted on successful submission
+"""
+
+import sys
+import os
+import tempfile
+
+sys.path.insert(
+
+    0,
+
+    os.path.dirname(
+        os.path.dirname(
+            os.path.abspath(__file__)
+        )
+    )
+
+)
+
+from datetime import (
+
+    datetime,
+    timezone,
+
+)
+
+from scorecards.schema import (
+
+    BlueprintCompetency,
+    CompetencyRating,
+    EvidenceEntry,
+    InterviewerScorecard,
+    materialize_scorecard_schema,
+    OverallRecommendation,
+    RoleBlueprint,
+    ScoreLabel,
+    SCORE_MAP,
+    CalibrationSnapshot,
+
+)
+
+from scorecards.validator import (
+    validate_scorecard
+)
+
+from scorecards import calibration as cal
+
+from scorecards.submission import (
+
+    submit_scorecard,
+    get_scorecard,
+    get_scorecards_by_interviewer,
+    clear_stores_for_testing,
+
+)
+
+from config.feature_flags import (
+    is_feature_enabled,
+    set_feature_enabled,
+)
+
+from database import set_database_path_for_testing
+
+from utils.audit_logger import (
+
+    query_by_candidate,
+    query_all,
+    clear_store_for_testing
+        as clear_audit_store,
+    ActionType,
+
+)
+
+# ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
+
+def make_blueprint(
+    must_have: list[str] = None
+) -> RoleBlueprint:
+
+    return RoleBlueprint(
+
+        blueprint_id=
+            "bp_backend",
+
+        blueprint_version=
+            "v1",
+
+        must_have_skills=(
+            must_have
+            or [
+                "problem_solving",
+                "system_design",
+                "communication",
+            ]
+        ),
+
+    )
+
+# ---------------------------------------------------------------------------
+
+def make_contract_blueprint() -> RoleBlueprint:
+
+    return RoleBlueprint(
+
+        blueprint_id="bp_backend",
+
+        blueprint_version="v1",
+
+        competencies=[
+
+            BlueprintCompetency(
+                competency_id="problem_solving",
+                required=True,
+                weight=0.35,
+                evidence_required=True,
+                knockout_candidate=True,
+            ),
+
+            BlueprintCompetency(
+                competency_id="system_design",
+                required=True,
+                weight=0.40,
+                evidence_required=True,
+                knockout_candidate=True,
+            ),
+
+            BlueprintCompetency(
+                competency_id="communication",
+                required=True,
+                weight=0.25,
+                evidence_required=True,
+                knockout_candidate=False,
+            ),
+
+        ],
+
+    )
+
+# ---------------------------------------------------------------------------
+
+def make_evidence(
+    competency: str,
+    text: str = None,
+) -> EvidenceEntry:
+
+    return EvidenceEntry(
+
+        competency=competency,
+
+        evidence_text=(
+            text
+            or
+            f"Candidate demonstrated "
+            f"strong {competency} "
+            f"through a structured approach."
+        ),
+
+        interview_ts=datetime.now(
+            timezone.utc
+        ),
+
+    )
+
+# ---------------------------------------------------------------------------
+
+def make_rating(
+
+    competency: str,
+
+    label: ScoreLabel =
+        ScoreLabel.LEAN_YES,
+
+    evidence_text: str = None,
+
+) -> CompetencyRating:
+
+    return CompetencyRating(
+
+        competency=competency,
+
+        label=label,
+
+        normalized_score=
+            SCORE_MAP[label],
+
+        evidence=[
+
+            make_evidence(
+                competency,
+                evidence_text
+            )
+
+        ],
+
+    )
+
+# ---------------------------------------------------------------------------
+
+def make_complete_scorecard(
+
+    round_id: str =
+        "round_001",
+
+    interviewer_id: str =
+        "interviewer_vikas",
+
+    competencies: list[str] = None,
+
+    label: ScoreLabel =
+        ScoreLabel.LEAN_YES,
+
+) -> InterviewerScorecard:
+
+    comps = (
+
+        competencies
+        or [
+            "problem_solving",
+            "system_design",
+            "communication",
+        ]
+
+    )
+
+    return InterviewerScorecard(
+
+        round_id=round_id,
+
+        interviewer_id=interviewer_id,
+
+        blueprint_id="bp_backend",
+
+        blueprint_version="v1",
+
+        competency_ratings=[
+
+            make_rating(
+                competency=c,
+                label=label
+            )
+
+            for c in comps
+
+        ],
+
+        overall_recommendation=
+            OverallRecommendation.YES,
+
+    )
+
+# ---------------------------------------------------------------------------
+
+def setup():
+
+    temp_db = tempfile.NamedTemporaryFile(
+        suffix=".sqlite3",
+        delete=False,
+    )
+
+    temp_db.close()
+
+    set_database_path_for_testing(
+        temp_db.name
+    )
+
+    clear_stores_for_testing()
+
+    clear_audit_store()
+
+    set_feature_enabled(
+        "f16_interviewer_scorecard",
+        True,
+    )
+
+# ---------------------------------------------------------------------------
+# Test 1 — Incomplete scorecard blocked
+# ---------------------------------------------------------------------------
+
+def test_unknown_feature_flag_disabled():
+
+    assert not is_feature_enabled(
+        "unknown_future_flag"
+    )
+
+    set_feature_enabled(
+        "unknown_future_flag",
+        True,
+    )
+
+    assert not is_feature_enabled(
+        "unknown_future_flag"
+    )
+
+    print(
+        "  [ok] "
+        "test_unknown_feature_flag_disabled"
+    )
+
+# ---------------------------------------------------------------------------
+
+def test_incomplete_scorecard_blocked():
+
+    setup()
+
+    blueprint = make_blueprint()
+
+    incomplete = InterviewerScorecard(
+
+        round_id="round_001",
+
+        interviewer_id=
+            "interviewer_vikas",
+
+        blueprint_id=
+            "bp_backend",
+
+        blueprint_version=
+            "v1",
+
+        competency_ratings=[
+
+            make_rating(
+                "problem_solving"
+            ),
+
+            make_rating(
+                "system_design"
+            ),
+
+        ],
+
+        overall_recommendation=
+            OverallRecommendation.NEUTRAL,
+
+    )
+
+    result = submit_scorecard(
+
+        scorecard=incomplete,
+
+        blueprint=blueprint,
+
+        candidate_id="cand_001",
+
+        hiring_group_id="hg_backend",
+
+    )
+
+    assert not result.is_valid
+
+    assert (
+        "communication"
+        in result.missing_competencies
+    )
+
+    persisted = get_scorecard(
+
+        "round_001",
+
+        "interviewer_vikas",
+
+    )
+
+    assert persisted is None
+
+    audit_events = query_by_candidate(
+        "cand_001"
+    )
+
+    blocked_events = [
+
+        event
+
+        for event
+        in audit_events
+
+        if event.action_type
+        ==
+        ActionType.SCORECARD_BLOCKED
+
+    ]
+
+    assert len(blocked_events) == 1
+
+    print(
+        "  [ok] "
+        "test_incomplete_scorecard_blocked"
+    )
+
+# ---------------------------------------------------------------------------
+# Test 2 — Missing evidence blocked
+# ---------------------------------------------------------------------------
+
+def test_missing_evidence_blocked():
+
+    setup()
+
+    blueprint = make_blueprint(
+        must_have=["problem_solving"]
+    )
+
+    bad_rating = CompetencyRating(
+
+        competency=
+            "problem_solving",
+
+        label=
+            ScoreLabel.LEAN_YES,
+
+        normalized_score=
+            SCORE_MAP[
+                ScoreLabel.LEAN_YES
+            ],
+
+        evidence=[],
+
+    )
+
+    scorecard = InterviewerScorecard(
+
+        round_id="round_002",
+
+        interviewer_id=
+            "interviewer_test",
+
+        blueprint_id=
+            "bp_backend",
+
+        blueprint_version=
+            "v1",
+
+        competency_ratings=[
+            bad_rating
+        ],
+
+        overall_recommendation=
+            OverallRecommendation.YES,
+
+    )
+
+    result = validate_scorecard(
+        scorecard,
+        blueprint
+    )
+
+    assert not result.is_valid
+
+    assert (
+        "problem_solving"
+        in result.missing_evidence
+    )
+
+    print(
+        "  [ok] "
+        "test_missing_evidence_blocked"
+    )
+
+# ---------------------------------------------------------------------------
+# Test 3 — Wrong normalized score blocked
+# ---------------------------------------------------------------------------
+
+def test_wrong_normalized_score_blocked():
+
+    setup()
+
+    blueprint = make_blueprint(
+        must_have=["problem_solving"]
+    )
+
+    bad_rating = CompetencyRating(
+
+        competency=
+            "problem_solving",
+
+        label=
+            ScoreLabel.STRONG_YES,
+
+        normalized_score=
+            10,
+
+        evidence=[
+            make_evidence(
+                "problem_solving"
+            )
+        ],
+
+    )
+
+    scorecard = InterviewerScorecard(
+
+        round_id="round_003",
+
+        interviewer_id=
+            "interviewer_test",
+
+        blueprint_id=
+            "bp_backend",
+
+        blueprint_version=
+            "v1",
+
+        competency_ratings=[
+            bad_rating
+        ],
+
+        overall_recommendation=
+            OverallRecommendation.YES,
+
+    )
+
+    result = validate_scorecard(
+        scorecard,
+        blueprint
+    )
+
+    assert not result.is_valid
+
+    assert (
+        len(
+            result.validation_errors
+        ) > 0
+    )
+
+    print(
+        "  [ok] "
+        "test_wrong_normalized_score_blocked"
+    )
+
+# ---------------------------------------------------------------------------
+# Test 4 — Missing recommendation blocked
+# ---------------------------------------------------------------------------
+
+def test_missing_recommendation_blocked():
+
+    setup()
+
+    blueprint = make_blueprint(
+        must_have=["problem_solving"]
+    )
+
+    scorecard = InterviewerScorecard(
+
+        round_id="round_004",
+
+        interviewer_id=
+            "interviewer_test",
+
+        blueprint_id=
+            "bp_backend",
+
+        blueprint_version=
+            "v1",
+
+        competency_ratings=[
+
+            make_rating(
+                "problem_solving"
+            )
+
+        ],
+
+        overall_recommendation=None,
+
+    )
+
+    result = validate_scorecard(
+        scorecard,
+        blueprint
+    )
+
+    assert not result.is_valid
+
+    assert any(
+
+        "overall_recommendation"
+        in error
+
+        for error
+        in result.validation_errors
+
+    )
+
+    print(
+        "  [ok] "
+        "test_missing_recommendation_blocked"
+    )
+
+# ---------------------------------------------------------------------------
+# Test 5 — Complete scorecard succeeds
+# ---------------------------------------------------------------------------
+
+def test_complete_scorecard_succeeds():
+
+    setup()
+
+    blueprint = make_blueprint()
+
+    scorecard = make_complete_scorecard()
+
+    result = submit_scorecard(
+
+        scorecard=scorecard,
+
+        blueprint=blueprint,
+
+        candidate_id="cand_002",
+
+        hiring_group_id="hg_backend",
+
+    )
+
+    assert result.is_valid
+
+    persisted = get_scorecard(
+
+        "round_001",
+
+        "interviewer_vikas",
+
+    )
+
+    assert persisted is not None
+
+    assert (
+        persisted.status.value
+        ==
+        "SUBMITTED"
+    )
+
+    assert (
+        persisted.submitted_at
+        is not None
+    )
+
+    audit_events = query_by_candidate(
+        "cand_002"
+    )
+
+    submitted_events = [
+
+        event
+
+        for event
+        in audit_events
+
+        if event.action_type
+        ==
+        ActionType.SCORECARD_SUBMITTED
+
+    ]
+
+    assert len(submitted_events) == 1
+
+    print(
+        "  [ok] "
+        "test_complete_scorecard_succeeds"
+    )
+
+# ---------------------------------------------------------------------------
+# Test 6 — Score map validation
+# ---------------------------------------------------------------------------
+
+def test_all_score_labels_map_correctly():
+
+    setup()
+
+    expected = {
+
+        ScoreLabel.STRONG_NO: 10,
+        ScoreLabel.LEAN_NO: 30,
+        ScoreLabel.NEUTRAL: 55,
+        ScoreLabel.LEAN_YES: 75,
+        ScoreLabel.STRONG_YES: 95,
+
+    }
+
+    for label, score in expected.items():
+
+        assert (
+            SCORE_MAP[label]
+            ==
+            score
+        )
+
+    print(
+        "  [ok] "
+        "test_all_score_labels_map_correctly"
+    )
+
+# ---------------------------------------------------------------------------
+# Test 7 — Calibration
+# ---------------------------------------------------------------------------
+
+def test_calibration_check_runs_on_10_scorecards():
+
+    setup()
+
+    alice_scorecards = [
+
+        make_complete_scorecard(
+
+            round_id=
+                f"round_{i}",
+
+            interviewer_id=
+                "alice",
+
+            competencies=[
+                "problem_solving"
+            ],
+
+            label=
+                ScoreLabel.LEAN_YES,
+
+        )
+
+        for i in range(10)
+
+    ]
+
+    org_scorecards = [
+
+        make_complete_scorecard(
+
+            round_id=
+                f"org_round_{i}",
+
+            interviewer_id=
+                f"other_{i}",
+
+            competencies=[
+                "problem_solving"
+            ],
+
+            label=
+                ScoreLabel.LEAN_NO,
+
+        )
+
+        for i in range(10)
+
+    ]
+
+    snapshot = (
+        cal.compute_calibration_snapshot(
+
+            interviewer_scorecards=
+                alice_scorecards,
+
+            all_scorecards=
+                alice_scorecards
+                + org_scorecards,
+
+            interviewer_id=
+                "alice",
+
+            snapshot_week=
+                "2025-W22",
+
+        )
+    )
+
+    assert snapshot is not None
+
+    assert (
+        snapshot.drift_pct
+        > 30.0
+    )
+
+    assert snapshot.flagged
+
+    assert (
+        snapshot.drift_direction
+        ==
+        "lenient"
+    )
+
+    print(
+        "  [ok] "
+        "test_calibration_check_runs_on_10_scorecards"
+    )
+
+# ---------------------------------------------------------------------------
+# Test 8 — Calibration threshold
+# ---------------------------------------------------------------------------
+
+def test_calibration_requires_10_scorecards():
+
+    setup()
+
+    alice_scorecards = [
+
+        make_complete_scorecard(
+
+            round_id=
+                f"round_{i}",
+
+            interviewer_id=
+                "alice",
+
+        )
+
+        for i in range(9)
+
+    ]
+
+    snapshot = (
+        cal.compute_calibration_snapshot(
+
+            interviewer_scorecards=
+                alice_scorecards,
+
+            all_scorecards=
+                alice_scorecards,
+
+            interviewer_id=
+                "alice",
+
+        )
+    )
+
+    assert snapshot is None
+
+    print(
+        "  [ok] "
+        "test_calibration_requires_10_scorecards"
+    )
+
+# ---------------------------------------------------------------------------
+# Test 9 — Outlier detection
+# ---------------------------------------------------------------------------
+
+def test_outlier_detection():
+
+    setup()
+
+    snap1 = CalibrationSnapshot(
+
+        interviewer_id="alice",
+
+        scorecard_count=10,
+
+        interviewer_avg=80.0,
+
+        org_avg=55.0,
+
+        drift_pct=45.5,
+
+        drift_direction="lenient",
+
+        flagged=True,
+
+        snapshot_week="2025-W21",
+
+    )
+
+    snap2 = CalibrationSnapshot(
+
+        interviewer_id="alice",
+
+        scorecard_count=15,
+
+        interviewer_avg=82.0,
+
+        org_avg=55.0,
+
+        drift_pct=49.1,
+
+        drift_direction="lenient",
+
+        flagged=True,
+
+        snapshot_week="2025-W22",
+
+    )
+
+    assert cal.detect_outlier(
+        [snap1, snap2]
+    )
+
+    print(
+        "  [ok] "
+        "test_outlier_detection"
+    )
+
+# ---------------------------------------------------------------------------
+# Test 10 — Audit integration
+# ---------------------------------------------------------------------------
+
+def test_submission_creates_audit_event():
+
+    setup()
+
+    blueprint = make_blueprint()
+
+    scorecard = make_complete_scorecard(
+
+        round_id=
+            "round_audit_test",
+
+        interviewer_id=
+            "interviewer_audit",
+
+    )
+
+    before = len(query_all())
+
+    result = submit_scorecard(
+
+        scorecard=scorecard,
+
+        blueprint=blueprint,
+
+        candidate_id=
+            "cand_audit",
+
+        hiring_group_id=
+            "hg_backend",
+
+    )
+
+    assert result.is_valid
+
+    after = len(query_all())
+
+    assert after == before + 1
+
+    latest = query_all()[-1]
+
+    assert (
+        latest.action_type
+        ==
+        ActionType.SCORECARD_SUBMITTED
+    )
+
+    assert (
+        latest.candidate_id
+        ==
+        "cand_audit"
+    )
+
+    print(
+        "  [ok] "
+        "test_submission_creates_audit_event"
+    )
+
+# ---------------------------------------------------------------------------
+# Test 11 - Blueprint materializes deterministic schema
+# ---------------------------------------------------------------------------
+
+def test_blueprint_materializes_schema_contract():
+
+    setup()
+
+    blueprint = make_contract_blueprint()
+
+    schema = materialize_scorecard_schema(
+        blueprint
+    )
+
+    assert schema.blueprint_id == "bp_backend"
+
+    assert schema.blueprint_version == "v1"
+
+    assert schema.schema_version == "v1"
+
+    assert [
+        competency.competency_id
+        for competency
+        in schema.competencies
+    ] == [
+        "problem_solving",
+        "system_design",
+        "communication",
+    ]
+
+    assert (
+        schema.score_scale["STRONG_YES"]
+        == 95
+    )
+
+    assert (
+        schema
+        .validation_contract
+        .evidence_required_per_competency
+    )
+
+    print(
+        "  [ok] "
+        "test_blueprint_materializes_schema_contract"
+    )
+
+# ---------------------------------------------------------------------------
+# Test 12 - Schema rejects invented competencies
+# ---------------------------------------------------------------------------
+
+def test_schema_rejects_invented_competency():
+
+    setup()
+
+    blueprint = make_contract_blueprint()
+
+    scorecard = make_complete_scorecard(
+        competencies=[
+            "problem_solving",
+            "system_design",
+            "communication",
+            "runtime_invented_skill",
+        ]
+    )
+
+    result = validate_scorecard(
+        scorecard,
+        materialize_scorecard_schema(blueprint),
+    )
+
+    assert not result.is_valid
+
+    assert any(
+        "runtime_invented_skill" in error
+        for error
+        in result.validation_errors
+    )
+
+    print(
+        "  [ok] "
+        "test_schema_rejects_invented_competency"
+    )
+
+# ---------------------------------------------------------------------------
+# Test 13 - Replay metadata includes deterministic contract versions
+# ---------------------------------------------------------------------------
+
+def test_submission_replay_metadata_includes_schema_contract():
+
+    setup()
+
+    blueprint = make_contract_blueprint()
+
+    scorecard = make_complete_scorecard()
+
+    result = submit_scorecard(
+
+        scorecard=scorecard,
+
+        blueprint=blueprint,
+
+        candidate_id="cand_contract",
+
+        hiring_group_id="hg_backend",
+
+    )
+
+    assert result.is_valid
+
+    latest = query_all()[-1]
+
+    replay_metadata = (
+        latest
+        .evidence_snapshot["replay_metadata"]
+    )
+
+    assert (
+        replay_metadata["blueprint_id"]
+        == "bp_backend"
+    )
+
+    assert (
+        replay_metadata["blueprint_version"]
+        == "v1"
+    )
+
+    assert (
+        replay_metadata["schema_version"]
+        == "v1"
+    )
+
+    assert (
+        replay_metadata["threshold_snapshot"]
+        ["score_map"]["LEAN_YES"]
+        == 75
+    )
+
+    print(
+        "  [ok] "
+        "test_submission_replay_metadata_includes_schema_contract"
+    )
+
+# ---------------------------------------------------------------------------
+# Runner
+# ---------------------------------------------------------------------------
+
+def run_all_tests():
+
+    print("\n" + "=" * 60)
+
+    print("SCORECARD — TEST SUITE")
+
+    print("=" * 60)
+
+    tests = [
+
+        test_unknown_feature_flag_disabled,
+        test_incomplete_scorecard_blocked,
+        test_missing_evidence_blocked,
+        test_wrong_normalized_score_blocked,
+        test_missing_recommendation_blocked,
+        test_complete_scorecard_succeeds,
+        test_all_score_labels_map_correctly,
+        test_calibration_check_runs_on_10_scorecards,
+        test_calibration_requires_10_scorecards,
+        test_outlier_detection,
+        test_submission_creates_audit_event,
+        test_blueprint_materializes_schema_contract,
+        test_schema_rejects_invented_competency,
+        test_submission_replay_metadata_includes_schema_contract,
+
+    ]
+
+    passed = 0
+
+    failed = 0
+
+    for test_fn in tests:
+
+        try:
+
+            test_fn()
+
+            passed += 1
+
+        except AssertionError as exc:
+
+            print(
+                f"  [fail] "
+                f"{test_fn.__name__}: "
+                f"{exc}"
+            )
+
+            failed += 1
+
+        except Exception as exc:
+
+            import traceback
+
+            print(
+                f"  [fail] "
+                f"{test_fn.__name__} "
+                f"CRASHED: "
+                f"{type(exc).__name__}: "
+                f"{exc}"
+            )
+
+            traceback.print_exc()
+
+            failed += 1
+
+    print("-" * 60)
+
+    print(
+
+        f"Results: "
+        f"{passed} passed / "
+        f"{failed} failed / "
+        f"{len(tests)} total"
+
+    )
+
+    print("=" * 60 + "\n")
+
+    return failed == 0
+
+# ---------------------------------------------------------------------------
+
+if __name__ == "__main__":
+
+    success = run_all_tests()
+
+    sys.exit(
+        0 if success else 1
+    )
