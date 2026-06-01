@@ -156,6 +156,20 @@ def submit_scorecard(
         submitted_scorecard
     )
 
+    try:
+        log_audit_event(
+            action_type=ActionType.SCORE_ASSIGNED,
+            actor_id="system::scorecard_submission",
+            actor_email="[system@platform.internal](mailto:system@platform.internal)",
+            candidate_id=str(candidate_id),
+            evidence_snapshot={
+                "module": "scorecards_submission"
+            },
+            summary="Scorecard submission completed"
+        )
+    except Exception:
+        pass
+
     _emit_audit_submitted(
 
         scorecard=submitted_scorecard,
