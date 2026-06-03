@@ -192,6 +192,40 @@ def submit_scorecard(
 
     return result
 
+
+def record_recommendation_generated_audit(
+    candidate_id: str,
+) -> None:
+    """
+    F11 audit stub for recommendation generation.
+    """
+
+    log_audit_event(
+        action_type=ActionType.F14_RECOMMENDATION_GENERATED,
+        actor_id="system::recommendation_engine",
+        actor_email="system@platform.internal",
+        candidate_id=str(candidate_id),
+        evidence_snapshot={"module": "F11"},
+        summary="Recommendation generated"
+    )
+
+
+def record_decision_override_audit(
+    candidate_id: str,
+) -> None:
+    """
+    HR override audit stub for manual decision override.
+    """
+
+    log_audit_event(
+        action_type=ActionType.DECISION_OVERRIDDEN,
+        actor_id="system::hr_override",
+        actor_email="system@platform.internal",
+        candidate_id=str(candidate_id),
+        evidence_snapshot={"module": "HR_OVERRIDE"},
+        summary="Decision overridden"
+    )
+
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
