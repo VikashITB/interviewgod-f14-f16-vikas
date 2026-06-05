@@ -149,26 +149,13 @@ def submit_scorecard(
     # -----------------------------------------------------------------------
 
     submitted_scorecard = _mark_submitted(
-        scorecard
+        scorecard,
+        candidate_id=candidate_id,
     )
 
     _persist_scorecard(
         submitted_scorecard
     )
-
-    try:
-        log_audit_event(
-            action_type=ActionType.SCORE_ASSIGNED,
-            actor_id="system::scorecard_submission",
-            actor_email="[system@platform.internal](mailto:system@platform.internal)",
-            candidate_id=str(candidate_id),
-            evidence_snapshot={
-                "module": "scorecards_submission"
-            },
-            summary="Scorecard submission completed"
-        )
-    except Exception:
-        pass
 
     _emit_audit_submitted(
 
@@ -231,24 +218,30 @@ def record_decision_override_audit(
 # ---------------------------------------------------------------------------
 
 def _mark_submitted(
-    scorecard: InterviewerScorecard
+    scorecard: InterviewerScorecard,
+    candidate_id: Optional[str] = None,
 ) -> InterviewerScorecard:
 
     """
     Return scorecard with submitted state.
     """
 
+    update_fields = {
+
+        "status": ScorecardStatus.SUBMITTED,
+
+        "submitted_at": datetime.now(
+            timezone.utc
+        ),
+
+    }
+
+    if candidate_id is not None:
+        update_fields["candidate_id"] = candidate_id
+
     return scorecard.model_copy(
 
-        update={
-
-            "status": ScorecardStatus.SUBMITTED,
-
-            "submitted_at": datetime.now(
-                timezone.utc
-            ),
-
-        }
+        update=update_fields
 
     )
 
@@ -395,7 +388,7 @@ def _emit_audit_blocked(
     event = log_audit_event(
 
         action_type=ActionType.SCORECARD_BLOCKED,
-        pipeline_stage=PipelineStage.CALL_SCREENING,
+        pipeline_stage=PipelineStage.INTERVIEW_INTEGRITY,
 
         actor_id=scorecard.interviewer_id,
 
@@ -560,7 +553,7 @@ def _emit_audit_submitted(
     event = log_audit_event(
 
         action_type=ActionType.SCORECARD_SUBMITTED,
-        pipeline_stage=PipelineStage.CALL_SCREENING,
+        pipeline_stage=PipelineStage.INTERVIEW_INTEGRITY,
 
         actor_id=scorecard.interviewer_id,
 

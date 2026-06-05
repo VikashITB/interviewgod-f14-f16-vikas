@@ -393,6 +393,21 @@ def test_incomplete_scorecard_blocked():
 
     assert len(blocked_events) == 1
 
+    submitted_events = [
+
+        event
+
+        for event
+        in audit_events
+
+        if event.action_type
+        ==
+        ActionType.SCORECARD_SUBMITTED
+
+    ]
+
+    assert len(submitted_events) == 0
+
     print(
         "  [ok] "
         "test_incomplete_scorecard_blocked"
@@ -464,6 +479,213 @@ def test_missing_evidence_blocked():
     print(
         "  [ok] "
         "test_missing_evidence_blocked"
+    )
+
+# ---------------------------------------------------------------------------
+
+def test_missing_evidence_submission_blocked():
+
+    setup()
+
+    blueprint = make_contract_blueprint()
+
+    bad_rating = CompetencyRating(
+
+        competency=
+            "problem_solving",
+
+        label=
+            ScoreLabel.LEAN_YES,
+
+        normalized_score=
+            SCORE_MAP[
+                ScoreLabel.LEAN_YES
+            ],
+
+        evidence=[],
+
+    )
+
+    scorecard = InterviewerScorecard(
+
+        round_id="round_002_blocked",
+
+        interviewer_id=
+            "interviewer_test",
+
+        blueprint_id=
+            "bp_backend",
+
+        blueprint_version=
+            "v1",
+
+        competency_ratings=[
+            bad_rating
+        ],
+
+        overall_recommendation=
+            OverallRecommendation.YES,
+
+    )
+
+    result = submit_scorecard(
+
+        scorecard=scorecard,
+
+        blueprint=blueprint,
+
+        candidate_id="cand_missing_evidence",
+
+        hiring_group_id="hg_backend",
+
+    )
+
+    assert not result.is_valid
+
+    assert (
+        "problem_solving"
+        in result.missing_evidence
+    )
+
+    persisted = get_scorecard(
+
+        "round_002_blocked",
+
+        "interviewer_test",
+
+    )
+
+    assert persisted is None
+
+    audit_events = query_by_candidate(
+        "cand_missing_evidence"
+    )
+
+    assert all(
+        event.action_type
+        !=
+        ActionType.SCORECARD_SUBMITTED
+        for event
+        in audit_events
+    )
+
+    blocked_events = [
+
+        event
+
+        for event
+        in audit_events
+
+        if event.action_type
+        ==
+        ActionType.SCORECARD_BLOCKED
+
+    ]
+
+    assert len(blocked_events) == 1
+
+    print(
+        "  [ok] "
+        "test_missing_evidence_submission_blocked"
+    )
+
+# ---------------------------------------------------------------------------
+
+def test_duplicate_competency_submission_blocked():
+
+    setup()
+
+    blueprint = make_contract_blueprint()
+
+    repeated_rating = make_rating(
+        "problem_solving"
+    )
+
+    scorecard = InterviewerScorecard(
+
+        round_id="round_002_duplicate",
+
+        interviewer_id=
+            "interviewer_test",
+
+        blueprint_id=
+            "bp_backend",
+
+        blueprint_version=
+            "v1",
+
+        competency_ratings=[
+            repeated_rating,
+            repeated_rating,
+        ],
+
+        overall_recommendation=
+            OverallRecommendation.YES,
+
+    )
+
+    result = submit_scorecard(
+
+        scorecard=scorecard,
+
+        blueprint=blueprint,
+
+        candidate_id="cand_duplicate",
+
+        hiring_group_id="hg_backend",
+
+    )
+
+    assert result.is_valid is False
+
+    assert any(
+        "Duplicate rating for competency"
+        in error
+        for error
+        in result.validation_errors
+    )
+
+    assert get_scorecard(
+        "round_002_duplicate",
+        "interviewer_test",
+    ) is None
+
+    assert all(
+        event.action_type
+        !=
+        ActionType.SCORECARD_SUBMITTED
+        for event
+        in query_by_candidate("cand_duplicate")
+    )
+
+    print(
+        "  [ok] "
+        "test_duplicate_competency_submission_blocked"
+    )
+
+# ---------------------------------------------------------------------------
+
+def test_invalid_numeric_rating_value_fails():
+
+    setup()
+
+    try:
+        CompetencyRating(
+            competency="problem_solving",
+            rating=6,
+            evidence=[
+                make_evidence("problem_solving")
+            ],
+        )
+
+        assert False, "Expected invalid numeric rating to raise"
+
+    except ValueError as exc:
+        assert "rating must be an integer between 1 and 5" in str(exc)
+
+    print(
+        "  [ok] "
+        "test_invalid_numeric_rating_value_fails"
     )
 
 # ---------------------------------------------------------------------------
@@ -607,6 +829,7 @@ def test_complete_scorecard_succeeds():
     blueprint = make_blueprint()
 
     scorecard = make_complete_scorecard()
+    scorecard.notes = "Recruiter notes preserved"
 
     result = submit_scorecard(
 
@@ -643,6 +866,12 @@ def test_complete_scorecard_succeeds():
         is not None
     )
 
+    assert persisted.candidate_id == "cand_002"
+    assert persisted.notes == "Recruiter notes preserved"
+    assert persisted.blueprint_version == "v1"
+    assert len(persisted.competency_ratings) == 3
+    assert persisted.competency_ratings[0].evidence
+
     audit_events = query_by_candidate(
         "cand_002"
     )
@@ -671,7 +900,160 @@ def test_complete_scorecard_succeeds():
 # Test 6 — Score map validation
 # ---------------------------------------------------------------------------
 
+def test_numeric_rating_payload_maps_to_label():
+
+    setup()
+
+    blueprint = RoleBlueprint(
+
+        blueprint_id="bp_backend",
+
+        blueprint_version="v1",
+
+        competencies=[
+            BlueprintCompetency(
+                competency_id="problem_solving",
+                required=True,
+                weight=0.40,
+                evidence_required=True,
+                knockout_candidate=False,
+            ),
+        ],
+
+    )
+
+    scorecard = InterviewerScorecard(
+
+        round_id="round_005",
+
+        interviewer_id="interviewer_numeric_rating",
+
+        blueprint_id="bp_backend",
+
+        blueprint_version="v1",
+
+        competency_ratings=[
+
+            CompetencyRating(
+                competency="problem_solving",
+                rating=4,
+                evidence=[
+                    make_evidence("problem_solving")
+                ],
+            )
+
+        ],
+
+        overall_recommendation=
+            OverallRecommendation.YES,
+
+    )
+
+    result = validate_scorecard(
+        scorecard,
+        blueprint,
+    )
+
+    assert result.is_valid
+
+    rating = scorecard.competency_ratings[0]
+
+    assert rating.label == ScoreLabel.LEAN_YES
+    assert rating.normalized_score == 75
+
+    print(
+        "  [ok] "
+        "test_numeric_rating_payload_maps_to_label"
+    )
+
+
+# ---------------------------------------------------------------------------
+
 def test_all_score_labels_map_correctly():
+
+    setup()
+
+    expected = {
+
+        ScoreLabel.STRONG_NO: 10,
+        ScoreLabel.LEAN_NO: 30,
+        ScoreLabel.NEUTRAL: 55,
+        ScoreLabel.LEAN_YES: 75,
+        ScoreLabel.STRONG_YES: 95,
+
+    }
+
+    for label, score in expected.items():
+
+        assert (
+            SCORE_MAP[label]
+            ==
+            score
+        )
+
+    print(
+        "  [ok] "
+        "test_all_score_labels_map_correctly"
+    )
+
+
+# ---------------------------------------------------------------------------
+
+def test_feature_flag_off_preserves_legacy_flow():
+
+    setup()
+
+    set_feature_enabled(
+        "f16_interviewer_scorecard",
+        False,
+    )
+
+    blueprint = make_blueprint()
+
+    scorecard = make_complete_scorecard(
+        round_id="round_flag_off"
+    )
+
+    result = submit_scorecard(
+
+        scorecard=scorecard,
+
+        blueprint=blueprint,
+
+        candidate_id="cand_flag_off",
+
+        hiring_group_id="hg_backend",
+
+    )
+
+    assert result.is_valid
+    assert (
+        result.blocking_reason
+        ==
+        "F16 feature flag disabled."
+    )
+
+    persisted = get_scorecard(
+        "round_flag_off",
+        "interviewer_vikas",
+    )
+
+    assert persisted is None
+
+    assert (
+        query_by_candidate("cand_flag_off")
+        == []
+    )
+
+    print(
+        "  [ok] "
+        "test_feature_flag_off_preserves_legacy_flow"
+    )
+
+
+# ---------------------------------------------------------------------------
+
+def test_schema_rejects_invented_competency():
 
     setup()
 

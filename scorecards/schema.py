@@ -30,7 +30,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from blueprints.models import (
     BlueprintCompetency,
@@ -51,6 +51,24 @@ class ScoreLabel(str, Enum):
     NEUTRAL    = "NEUTRAL"
     LEAN_YES   = "LEAN_YES"
     STRONG_YES = "STRONG_YES"
+
+    @classmethod
+    def from_numeric(cls, rating: int) -> "ScoreLabel":
+
+        mapping = {
+            1: cls.STRONG_NO,
+            2: cls.LEAN_NO,
+            3: cls.NEUTRAL,
+            4: cls.LEAN_YES,
+            5: cls.STRONG_YES,
+        }
+
+        try:
+            return mapping[int(rating)]
+        except (ValueError, TypeError, KeyError) as exc:
+            raise ValueError(
+                "rating must be an integer between 1 and 5"
+            ) from exc
 
 
 # ---------------------------------------------------------------------------
@@ -118,6 +136,47 @@ class CompetencyRating(BaseModel):
 
     notes: Optional[str] = None
 
+    category: Optional[str] = None
+
+    rating: Optional[int] = None
+
+    @model_validator(mode="before")
+    def normalize_rating_payload(cls, values):
+
+        rating = values.get("rating")
+        label = values.get("label")
+        normalized_score = values.get("normalized_score")
+
+        if rating is not None:
+            label_from_rating = ScoreLabel.from_numeric(rating)
+
+            if label is None:
+                values["label"] = label_from_rating
+            else:
+                provided_label = (
+                    label
+                    if isinstance(label, ScoreLabel)
+                    else ScoreLabel(label)
+                )
+
+                if provided_label != label_from_rating:
+                    raise ValueError(
+                        f"rating {rating} maps to {label_from_rating.value} "
+                        f"but label {provided_label.value} was provided."
+                    )
+
+            if normalized_score is None:
+                values["normalized_score"] = SCORE_MAP[label_from_rating]
+
+        elif normalized_score is None and label is not None:
+            values["normalized_score"] = SCORE_MAP[
+                label
+                if isinstance(label, ScoreLabel)
+                else ScoreLabel(label)
+            ]
+
+        return values
+
 
 # ---------------------------------------------------------------------------
 # Scorecard lifecycle
@@ -159,6 +218,10 @@ class InterviewerScorecard(BaseModel):
     blueprint_id: str
 
     blueprint_version: str
+
+    candidate_id: Optional[str] = None
+
+    notes: Optional[str] = None
 
     competency_ratings: list[CompetencyRating]
 

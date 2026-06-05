@@ -67,18 +67,25 @@ def validate_scorecard(
     # Build lookup
     # -----------------------------------------------------------------------
 
-    rated_map: dict[str, object] = {}
+    seen_competencies: dict[str, object] = {}
 
     for rating in scorecard.competency_ratings:
 
-        if rating.competency in rated_map:
+        competency_key = (
+            rating.competency.strip().lower()
+            if isinstance(rating.competency, str)
+            else str(rating.competency)
+        )
+
+        if competency_key in seen_competencies:
 
             validation_errors.append(
-                f"Competency '{rating.competency}' "
-                "was rated more than once."
+                f"Duplicate rating for competency: '{rating.competency}'"
             )
 
-        rated_map[rating.competency] = rating
+        else:
+
+            seen_competencies[competency_key] = rating
 
     competency_contracts = {
 
@@ -123,7 +130,8 @@ def validate_scorecard(
 
             if (
                 competency.required
-                and competency.competency_id not in rated_map
+                and competency.competency_id
+                not in seen_competencies
             ):
 
                 missing_competencies.append(
