@@ -170,7 +170,7 @@ class AuditEvent(BaseModel):
     blueprint_version: Optional[str] = None
 
     # Actor
-    actor_type:        Optional[str] = None
+    actor_type:        Optional[str] = "system"
     actor_id:          str
     actor_email:       str
 
@@ -197,7 +197,7 @@ def log_audit_event(
     action_type:       ActionType | str,
     actor_id:          str,
     actor_email:       str,
-    actor_type:        Optional[str] = None,
+    actor_type:        Optional[str] = "system",
     pipeline_stage:    Optional[PipelineStage | str] = None,
     candidate_id:      Optional[str]       = None,
     round_id:          Optional[str]       = None,

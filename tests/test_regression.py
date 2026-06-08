@@ -238,6 +238,33 @@ def test_f14_carries_no_business_logic():
 
     setup()
 
+    from utils.audit_logger import AuditEvent
+
+    audit_fields = set(
+        AuditEvent.model_fields.keys()
+    )
+
+    # Context fields like blueprint_id / blueprint_version are first-class
+    # per spec, same tier as candidate_id and round_id. Forbidden fields are
+    # scorecard or domain-specific business data.
+    forbidden = {
+        "competency_ratings",
+        "normalized_score",
+        "recommendation_score",
+        "knockout_reason",
+        "calibration_flag",
+        "calibration_drift_pct",
+        "scorecard_id",
+        "interview_score",
+    }
+
+    leaking = audit_fields & forbidden
+
+    assert not leaking, (
+        f"F14 is leaking business-logic fields: {leaking}. "
+        "AuditEvent must stay generic."
+    )
+
     payload = {
         "score": 75,
     }
