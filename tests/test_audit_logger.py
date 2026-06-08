@@ -1107,6 +1107,80 @@ def test_semantic_action_taxonomy_alignment():
 
     print("  [ok] test_semantic_action_taxonomy_alignment")
 
+def test_first_class_blueprint_and_actor_metadata_round_trip():
+
+    setup()
+
+    log_audit_event(
+        action_type=ActionType.SCORECARD_SUBMITTED,
+        actor_id="interviewer_metadata",
+        actor_email="interviewer_metadata@platform.internal",
+        actor_type="INTERVIEWER",
+        candidate_id="cand_metadata",
+        round_id="round_metadata",
+        hiring_group_id="hg_metadata",
+        blueprint_id="bp_metadata",
+        blueprint_version="v3",
+        evidence_snapshot={
+            "blueprint_id": "bp_metadata",
+            "blueprint_version": "v3",
+        },
+        summary="Metadata round trip",
+    )
+
+    memory_event = query_all()[0]
+
+    assert_equal(
+        memory_event.actor_type,
+        "INTERVIEWER",
+        "actor_type first-class in memory",
+    )
+
+    assert_equal(
+        memory_event.blueprint_id,
+        "bp_metadata",
+        "blueprint_id first-class in memory",
+    )
+
+    assert_equal(
+        memory_event.blueprint_version,
+        "v3",
+        "blueprint_version first-class in memory",
+    )
+
+    db_event = query_by_candidate_from_db(
+        "cand_metadata"
+    )[0]
+
+    assert_equal(
+        db_event.actor_type,
+        "INTERVIEWER",
+        "actor_type reconstructed from db",
+    )
+
+    assert_equal(
+        db_event.blueprint_id,
+        "bp_metadata",
+        "blueprint_id reconstructed from db",
+    )
+
+    assert_equal(
+        db_event.blueprint_version,
+        "v3",
+        "blueprint_version reconstructed from db",
+    )
+
+    assert_equal(
+        db_event.evidence_snapshot["blueprint_id"],
+        "bp_metadata",
+        "evidence blueprint_id preserved",
+    )
+
+    print(
+        "  [ok] "
+        "test_first_class_blueprint_and_actor_metadata_round_trip"
+    )
+
 # ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
@@ -1134,6 +1208,7 @@ def run_all_tests():
         test_db_update_trigger_blocks_mutation,
         test_db_delete_trigger_blocks_mutation,
         test_semantic_action_taxonomy_alignment,
+        test_first_class_blueprint_and_actor_metadata_round_trip,
 
     ]
 

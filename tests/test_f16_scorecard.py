@@ -13,6 +13,7 @@ Covers:
 import sys
 import os
 import tempfile
+import importlib.util
 
 sys.path.insert(
 
@@ -1479,6 +1480,115 @@ def test_submission_replay_metadata_includes_schema_contract():
         "test_submission_replay_metadata_includes_schema_contract"
     )
 
+
+def load_scorecard_adapter():
+
+    adapter_path = os.path.join(
+        os.path.dirname(
+            os.path.dirname(
+                os.path.abspath(__file__)
+            )
+        ),
+        "hr-feedback",
+        "scorecard.py",
+    )
+
+    spec = importlib.util.spec_from_file_location(
+        "hr_feedback_scorecard_adapter",
+        adapter_path,
+    )
+
+    module = importlib.util.module_from_spec(spec)
+
+    sys.modules[spec.name] = module
+
+    spec.loader.exec_module(module)
+
+    return module
+
+
+def test_scorecard_adapter_maps_valid_submission_to_201():
+
+    setup()
+
+    set_feature_enabled(
+        "f16_interviewer_scorecard",
+        True,
+    )
+
+    adapter = load_scorecard_adapter()
+
+    scorecard = make_complete_scorecard(
+        round_id="round_adapter_success"
+    )
+
+    response = adapter.post_interview_scorecard(
+        round_id="round_adapter_success",
+        scorecard=scorecard,
+        blueprint=make_contract_blueprint(),
+        candidate_id="cand_adapter_success",
+        hiring_group_id="hg_adapter",
+    )
+
+    assert response.status_code == 201
+    assert response.body["is_valid"] is True
+
+    persisted = get_scorecard(
+        "round_adapter_success",
+        "interviewer_vikas",
+    )
+
+    assert persisted is not None
+
+    print(
+        "  [ok] "
+        "test_scorecard_adapter_maps_valid_submission_to_201"
+    )
+
+
+def test_scorecard_adapter_maps_invalid_submission_to_400():
+
+    setup()
+
+    set_feature_enabled(
+        "f16_interviewer_scorecard",
+        True,
+    )
+
+    adapter = load_scorecard_adapter()
+
+    scorecard = make_complete_scorecard(
+        round_id="round_adapter_invalid",
+        competencies=[
+            "problem_solving",
+            "system_design",
+        ],
+    )
+
+    response = adapter.post_interview_scorecard(
+        round_id="round_adapter_invalid",
+        scorecard=scorecard,
+        blueprint=make_contract_blueprint(),
+        candidate_id="cand_adapter_invalid",
+        hiring_group_id="hg_adapter",
+    )
+
+    assert response.status_code == 400
+    assert response.body["is_valid"] is False
+    assert "communication" in response.body["missing_competencies"]
+
+    persisted = get_scorecard(
+        "round_adapter_invalid",
+        "interviewer_vikas",
+    )
+
+    assert persisted is None
+
+    print(
+        "  [ok] "
+        "test_scorecard_adapter_maps_invalid_submission_to_400"
+    )
+
 # ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
@@ -1507,6 +1617,8 @@ def run_all_tests():
         test_blueprint_materializes_schema_contract,
         test_schema_rejects_invented_competency,
         test_submission_replay_metadata_includes_schema_contract,
+        test_scorecard_adapter_maps_valid_submission_to_201,
+        test_scorecard_adapter_maps_invalid_submission_to_400,
 
     ]
 

@@ -403,6 +403,10 @@ def _emit_audit_blocked(
 
         hiring_group_id=hiring_group_id,
 
+        blueprint_id=schema.blueprint_id,
+
+        blueprint_version=schema.blueprint_version,
+
         evidence_snapshot={
 
             "evidence_schema_version":
@@ -567,6 +571,10 @@ def _emit_audit_submitted(
         round_id=scorecard.round_id,
 
         hiring_group_id=hiring_group_id,
+
+        blueprint_id=schema.blueprint_id,
+
+        blueprint_version=schema.blueprint_version,
 
         evidence_snapshot={
 

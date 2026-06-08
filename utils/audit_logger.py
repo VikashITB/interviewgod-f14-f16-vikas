@@ -166,8 +166,11 @@ class AuditEvent(BaseModel):
     candidate_id:      Optional[str] = None
     round_id:          Optional[str] = None
     hiring_group_id:   Optional[str] = None
+    blueprint_id:      Optional[str] = None
+    blueprint_version: Optional[str] = None
 
     # Actor
+    actor_type:        Optional[str] = None
     actor_id:          str
     actor_email:       str
 
@@ -194,10 +197,13 @@ def log_audit_event(
     action_type:       ActionType | str,
     actor_id:          str,
     actor_email:       str,
+    actor_type:        Optional[str] = None,
     pipeline_stage:    Optional[PipelineStage | str] = None,
     candidate_id:      Optional[str]       = None,
     round_id:          Optional[str]       = None,
     hiring_group_id:   Optional[str]       = None,
+    blueprint_id:      Optional[str]       = None,
+    blueprint_version: Optional[str]       = None,
     evidence_snapshot: Optional[dict]      = None,
     summary:           Optional[str]       = None,
 ) -> AuditEvent:
@@ -215,11 +221,14 @@ def log_audit_event(
     event = AuditEvent(
         action_type=resolved_action_type,
         pipeline_stage=resolved_pipeline_stage,
+        actor_type=actor_type,
         actor_id=actor_id,
         actor_email=actor_email,
         candidate_id=candidate_id,
         round_id=round_id,
         hiring_group_id=hiring_group_id,
+        blueprint_id=blueprint_id,
+        blueprint_version=blueprint_version,
         evidence_snapshot=evidence_snapshot,
         summary=summary,
     )
@@ -288,16 +297,19 @@ def _persist_to_db(event: AuditEvent) -> None:
         candidate_id,
         round_id,
         hiring_group_id,
+        blueprint_id,
+        blueprint_version,
 
         actor_id,
         actor_email,
+        actor_type,
 
         evidence_snapshot,
         summary
 
     )
 
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 
     """, (
 
@@ -309,9 +321,12 @@ def _persist_to_db(event: AuditEvent) -> None:
         event.candidate_id,
         event.round_id,
         event.hiring_group_id,
+        event.blueprint_id,
+        event.blueprint_version,
 
         event.actor_id,
         event.actor_email,
+        event.actor_type,
 
         (
             json.dumps(event.evidence_snapshot)
@@ -357,9 +372,12 @@ def _ensure_audit_table_shape(cursor) -> None:
         candidate_id TEXT,
         round_id TEXT,
         hiring_group_id TEXT,
+        blueprint_id TEXT,
+        blueprint_version TEXT,
 
         actor_id TEXT,
         actor_email TEXT,
+        actor_type TEXT,
 
         evidence_snapshot TEXT,
         summary TEXT
@@ -374,6 +392,24 @@ def _ensure_audit_table_shape(cursor) -> None:
         cursor.execute("""
         ALTER TABLE audit_trail
         ADD COLUMN pipeline_stage TEXT
+        """)
+
+    if "blueprint_id" not in existing_columns:
+        cursor.execute("""
+        ALTER TABLE audit_trail
+        ADD COLUMN blueprint_id TEXT
+        """)
+
+    if "blueprint_version" not in existing_columns:
+        cursor.execute("""
+        ALTER TABLE audit_trail
+        ADD COLUMN blueprint_version TEXT
+        """)
+
+    if "actor_type" not in existing_columns:
+        cursor.execute("""
+        ALTER TABLE audit_trail
+        ADD COLUMN actor_type TEXT
         """)
 
     cursor.execute("""
@@ -452,8 +488,11 @@ def query_by_candidate_from_db(candidate_id: str) -> list[AuditEvent]:
         candidate_id,
         round_id,
         hiring_group_id,
+        blueprint_id,
+        blueprint_version,
         actor_id,
         actor_email,
+        actor_type,
         evidence_snapshot,
         summary
 
@@ -498,8 +537,11 @@ def query_by_hiring_group_from_db(hiring_group_id: str) -> list[AuditEvent]:
         candidate_id,
         round_id,
         hiring_group_id,
+        blueprint_id,
+        blueprint_version,
         actor_id,
         actor_email,
+        actor_type,
         evidence_snapshot,
         summary
 
@@ -542,8 +584,11 @@ def query_by_action_type_from_db(action_type: ActionType | str) -> list[AuditEve
         candidate_id,
         round_id,
         hiring_group_id,
+        blueprint_id,
+        blueprint_version,
         actor_id,
         actor_email,
+        actor_type,
         evidence_snapshot,
         summary
 
@@ -600,11 +645,11 @@ def _audit_event_from_db_row(row) -> AuditEvent:
 
     evidence_snapshot = None
 
-    if row[9]:
+    if row[12]:
         evidence_snapshot = (
-            row[9]
-            if isinstance(row[9], dict)
-            else json.loads(row[9])
+            row[12]
+            if isinstance(row[12], dict)
+            else json.loads(row[12])
         )
 
     pipeline_stage = (
@@ -625,10 +670,13 @@ def _audit_event_from_db_row(row) -> AuditEvent:
         candidate_id=row[4],
         round_id=row[5],
         hiring_group_id=row[6],
-        actor_id=row[7],
-        actor_email=row[8],
+        blueprint_id=row[7],
+        blueprint_version=row[8],
+        actor_id=row[9],
+        actor_email=row[10],
+        actor_type=row[11],
         evidence_snapshot=evidence_snapshot,
-        summary=row[10],
+        summary=row[13],
     )
 
 
